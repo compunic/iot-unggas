@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Smart Poultry Farm Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial;
+            background: #eef2f3;
+        }
+
+        /* HEADER */
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin: 0;
+        }
+
+        /* CONTAINER */
+        .container {
+            width: 90%;
+            margin: auto;
+        }
+
+        /* CARD */
+        .card {
+            background: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        /* GRID KPI */
+        .grid {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .kpi {
+            flex: 1;
+            min-width: 200px;
+            text-align: center;
+            font-size: 18px;
+        }
+
+        /* BUTTON */
+        button {
+            margin: 5px;
+            padding: 8px 12px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background: #3498db;
+            color: white;
+        }
+
+        button:hover {
+            background: #2980b9;
+        }
+
+        /* STATUS */
+        .good { color: green; }
+        .warning { color: orange; }
+        .danger { color: red; }
+
+        canvas {
+            height: 300px !important;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="header">
+    <h1>🐥 Smart Poultry Farm Monitoring System</h1>
+    <p>Monitoring Suhu • Kelembaban • Amonia (NH₃)</p>
+</div>
+
+<div class="container">
+
+<!-- FILTER -->
+<div class="card">
+    <button onclick="loadData('minute')">Menit</button>
+    <button onclick="loadData('hour')">Jam</button>
+    <button onclick="loadData('daily')">Harian</button>
+    <button onclick="loadData('weekly')">Mingguan</button>
+    <button onclick="loadData('monthly')">Bulanan</button>
+</div>
+
+<!-- KPI -->
+<div class="grid">
+    <div class="card kpi" id="kpiSuhu">🌡️ -- °C</div>
+    <div class="card kpi" id="kpiHum">💧 -- %</div>
+    <div class="card kpi" id="kpiAmonia">🧪 -- ppm</div>
+</div>
+
+<!-- STATUS -->
+<div class="card" id="statusBox">
+    Loading status...
+</div>
+
+<!-- CHART GABUNG -->
+<div class="card">
+    <h3>📊 Grafik Lingkungan Kandang</h3>
+    <canvas id="chartGabung"></canvas>
+</div>
+
+</div>
+
+<script>
+
+let currentRange = "hour";
+
+// ================= CHART =================
+let chartGabung = new Chart(document.getElementById('chartGabung'), {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [
+            {
+                label: 'Suhu (°C)',
+                borderColor: 'red',
+                data: [],
+                yAxisID: 'y1'
+            },
+            {
+                label: 'Kelembaban (%)',
+                borderColor: 'blue',
+                data: [],
+                yAxisID: 'y2'
+            },
+            {
+                label: 'Amonia (ppm)',
+                borderColor: 'green',
+                data: [],
+                yAxisID: 'y2'
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        interaction: {
+            mode: 'index',
+            intersect: false
+        },
+        scales: {
+            y1: {
+                type: 'linear',
+                position: 'left',
+                title: {
+                    display: true,
+                    text: 'Suhu (°C)'
+                }
+            },
+            y2: {
+                type: 'linear',
+                position: 'right',
+                title: {
+                    display: true,
+                    text: 'Kelembaban (%) / Amonia (ppm)'
+                },
+                grid: {
+                    drawOnChartArea: false
+                }
+            }
+        }
+    }
+});
+
+// ================= LOAD DATA =================
+async function loadData(range='hour') {
+    currentRange = range;
+
+    let res = await fetch('/chart-data?range=' + range);
+    let data = await res.json();
+
+    chartGabung.data.labels = data.waktu;
+    chartGabung.data.datasets[0].data = data.suhu;
+    chartGabung.data.datasets[1].data = data.kelembaban;
+    chartGabung.data.datasets[2].data = data.amonia;
+
+    chartGabung.update();
+}
+
+// ================= STATUS =================
+async function updateStatus() {
+    let res = await fetch('/analysis');
+    let data = await res.json();
+
+    let box = document.getElementById("statusBox");
+
+    let color = "good";
+    if (data.kondisi === "WARNING") color = "warning";
+    if (data.kondisi === "BAHAYA") color = "danger";
+
+    box.className = "card " + color;
+
+    box.innerHTML = `
+        <h3>📊 Status Kandang DOC</h3>
+        🌡️ Suhu: <b>${data.suhu}°C</b> → ${data.status_suhu}<br>
+        💧 Kelembaban: <b>${data.kelembaban}%</b> → ${data.status_kelembaban}<br>
+        🧪 Amonia: <b>${data.amonia ?? '-'} ppm</b> → ${data.status_amonia}<br>
+        🐥 Kondisi: <b>${data.kondisi}</b>
+    `;
+
+    // KPI update
+    document.getElementById("kpiSuhu").innerHTML = "🌡️ " + data.suhu + " °C";
+    document.getElementById("kpiHum").innerHTML = "💧 " + data.kelembaban + " %";
+    document.getElementById("kpiAmonia").innerHTML = "🧪 " + (data.amonia ?? '-') + " ppm";
+}
+
+// ================= REALTIME =================
+setInterval(() => {
+    loadData(currentRange);
+    updateStatus();
+}, 3000);
+
+// INIT
+loadData('hour');
+updateStatus();
+
+</script>
+
+</body>
+</html>

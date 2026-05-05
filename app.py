@@ -1,10 +1,12 @@
-import sqlite3 os
+import sqlite3 
+import os
 from flask import Flask, request, jsonify, render_template
 
 SECRET_PASSWORD = "stadiotoflask"
 app = Flask(__name__)
 
-DB_NAME = "dhtmq.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME = os.path.join(BASE_DIR, "dhtmq.db")
 
 # =========================
 # INIT DATABASE
@@ -287,7 +289,8 @@ def home():
 # MAIN
 # =========================
 
+init_db()
+
 if __name__ == "__main__":
-    init_db()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

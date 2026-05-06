@@ -1,231 +1,166 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Smart Poultry Farm Dashboard</title>
+    <title>TV Monitoring Kandang</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <style>
-        body { margin: 0; font-family: Arial; background: #eef2f3; }
-
-        .header {
-            background: #2c3e50;
+        body {
+            margin: 0;
+            font-family: Arial;
+            background: #1e1e2f;
             color: white;
-            padding: 15px;
-            text-align: center;
         }
 
-        .container { width: 90%; margin: auto; }
-
-        .card {
-            background: white;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 10px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        .header {
+            text-align: center;
+            padding: 10px;
+            background: #111827;
+            font-size: 24px;
         }
 
         .grid {
-            display: flex;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
             gap: 10px;
-            flex-wrap: wrap;
+            padding: 10px;
+        }
+
+        .card {
+            border-radius: 10px;
+            padding: 10px;
+            background: #2c3e50;
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 5px;
         }
 
         .kpi {
-            flex: 1;
-            min-width: 200px;
-            text-align: center;
             font-size: 18px;
+            margin: 3px 0;
         }
 
-        button {
-            margin: 5px;
-            padding: 8px 12px;
-            cursor: pointer;
-            border: none;
-            border-radius: 5px;
-            background: #3498db;
-            color: white;
+        .aman { background: #14532d; }
+        .warning { background: #92400e; }
+        .bahaya { background: #7f1d1d; }
+
+        canvas {
+            height: 150px !important;
         }
-
-        button:hover { background: #2980b9; }
-
-        select {
-            padding: 8px;
-            border-radius: 5px;
-            margin-left: 10px;
-        }
-
-        .good { color: green; }
-        .warning { color: orange; }
-        .danger { color: red; }
-
-        canvas { height: 300px !important; }
     </style>
 </head>
 
 <body>
 
 <div class="header">
-    <h1>🐥 Smart Poultry Farm Monitoring System</h1>
-    <p>Monitoring Multi Kandang (Suhu • Kelembaban • Amonia)</p>
+    🐥 SMART POULTRY FARM - TV MONITORING
 </div>
 
-<div class="container">
-
-<!-- FILTER + DEVICE -->
-<div class="card">
-    Pilih Kandang:
-    <select id="deviceSelect" onchange="changeDevice()"></select>
-
-    <br><br>
-
-    <button onclick="loadData('minute')">Menit</button>
-    <button onclick="loadData('hour')">Jam</button>
-    <button onclick="loadData('weekly')">Mingguan</button>
-    <button onclick="loadData('monthly')">Bulanan</button>
-</div>
-
-<!-- KPI -->
-<div class="grid">
-    <div class="card kpi" id="kpiSuhu">🌡️ -- °C</div>
-    <div class="card kpi" id="kpiHum">💧 -- %</div>
-    <div class="card kpi" id="kpiAmonia">🧪 -- ppm</div>
-</div>
-
-<!-- STATUS -->
-<div class="card" id="statusBox">
-    Loading status...
-</div>
-
-<!-- CHART -->
-<div class="card">
-    <h3>📊 Grafik Lingkungan Kandang</h3>
-    <canvas id="chartGabung"></canvas>
-</div>
-
-</div>
+<div id="grid" class="grid"></div>
 
 <script>
 
-let currentRange = "hour";
-let currentDevice = "";
+let devices = [];
+let charts = {};
 
 // ================= LOAD DEVICES =================
 async function loadDevices() {
     let res = await fetch('/devices');
-    let devices = await res.json();
+    devices = await res.json();
 
-    let select = document.getElementById("deviceSelect");
-    select.innerHTML = "";
+    let grid = document.getElementById("grid");
+    grid.innerHTML = "";
 
-    devices.forEach(d => {
-        let opt = document.createElement("option");
-        opt.value = d;
-        opt.text = d;
-        select.appendChild(opt);
-    });
+    devices.forEach(dev => {
+        let card = document.createElement("div");
+        card.className = "card";
+        card.id = "card_" + dev;
 
-    if (devices.length > 0) {
-        currentDevice = devices[0];
-        select.value = currentDevice;
-    }
-}
+        card.innerHTML = `
+            <div class="title">${dev}</div>
+            <div class="kpi" id="suhu_${dev}">🌡️ --</div>
+            <div class="kpi" id="hum_${dev}">💧 --</div>
+            <div class="kpi" id="amonia_${dev}">🧪 --</div>
+            <canvas id="chart_${dev}"></canvas>
+        `;
 
-// ================= CHANGE DEVICE =================
-function changeDevice() {
-    currentDevice = document.getElementById("deviceSelect").value;
-    loadData(currentRange);
-    updateStatus();
-}
+        grid.appendChild(card);
 
-// ================= CHART =================
-let chartGabung = new Chart(document.getElementById('chartGabung'), {
-    type: 'line',
-    data: {
-        labels: [],
-        datasets: [
-            { label: 'Suhu (°C)', borderColor: 'red', data: [], yAxisID: 'y1' },
-            { label: 'Kelembaban (%)', borderColor: 'blue', data: [], yAxisID: 'y2' },
-            { label: 'Amonia (ppm)', borderColor: 'green', data: [], yAxisID: 'y2' }
-        ]
-    },
-    options: {
-        responsive: true,
-        interaction: { mode: 'index', intersect: false },
-        scales: {
-            y1: {
-                type: 'linear',
-                position: 'left',
-                title: { display: true, text: 'Suhu (°C)' }
+        // buat chart
+        let ctx = document.getElementById(`chart_${dev}`);
+        charts[dev] = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Suhu', borderColor: 'red', data: [] },
+                    { label: 'Hum', borderColor: 'blue', data: [] }
+                ]
             },
-            y2: {
-                type: 'linear',
-                position: 'right',
-                title: { display: true, text: 'Kelembaban / Amonia' },
-                grid: { drawOnChartArea: false }
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } }
             }
-        }
-    }
-});
-
-// ================= LOAD DATA =================
-async function loadData(range='hour') {
-    currentRange = range;
-
-    if (!currentDevice) return;
-
-    let res = await fetch(`/chart-data?range=${range}&nama_esp=${currentDevice}`);
-    let data = await res.json();
-
-    chartGabung.data.labels = data.waktu;
-    chartGabung.data.datasets[0].data = data.suhu;
-    chartGabung.data.datasets[1].data = data.kelembaban;
-    chartGabung.data.datasets[2].data = data.amonia;
-
-    chartGabung.update();
+        });
+    });
 }
 
-// ================= STATUS =================
-async function updateStatus() {
-    if (!currentDevice) return;
+// ================= UPDATE PER DEVICE =================
+async function updateDevice(dev) {
 
-    let res = await fetch(`/analysis?nama_esp=${currentDevice}`);
-    let data = await res.json();
+    // STATUS
+    let res1 = await fetch(`/analysis?nama_esp=${dev}`);
+    let data = await res1.json();
 
-    let box = document.getElementById("statusBox");
+    let card = document.getElementById("card_" + dev);
 
-    let color = "good";
+    let color = "aman";
     if (data.kondisi === "WARNING") color = "warning";
-    if (data.kondisi === "BAHAYA") color = "danger";
+    if (data.kondisi === "BAHAYA") color = "bahaya";
 
-    box.className = "card " + color;
+    card.className = "card " + color;
 
-    box.innerHTML = `
-        <h3>📊 Status ${currentDevice}</h3>
-        🌡️ ${data.suhu}°C → ${data.status_suhu}<br>
-        💧 ${data.kelembaban}% → ${data.status_kelembaban}<br>
-        🧪 ${data.amonia ?? '-'} ppm → ${data.status_amonia}<br>
-        🐥 <b>${data.kondisi}</b>
-    `;
+    document.getElementById(`suhu_${dev}`).innerHTML =
+        `🌡️ ${data.suhu}°C (${data.status_suhu})`;
 
-    document.getElementById("kpiSuhu").innerHTML = "🌡️ " + data.suhu + " °C";
-    document.getElementById("kpiHum").innerHTML = "💧 " + data.kelembaban + " %";
-    document.getElementById("kpiAmonia").innerHTML = "🧪 " + (data.amonia ?? '-') + " ppm";
+    document.getElementById(`hum_${dev}`).innerHTML =
+        `💧 ${data.kelembaban}% (${data.status_kelembaban})`;
+
+    document.getElementById(`amonia_${dev}`).innerHTML =
+        `🧪 ${data.amonia ?? '-'} ppm (${data.status_amonia})`;
+
+
+    // CHART
+    let res2 = await fetch(`/chart-data?range=hour&nama_esp=${dev}`);
+    let chartData = await res2.json();
+
+    let chart = charts[dev];
+
+    chart.data.labels = chartData.waktu;
+    chart.data.datasets[0].data = chartData.suhu;
+    chart.data.datasets[1].data = chartData.kelembaban;
+
+    chart.update();
 }
 
-// ================= REALTIME =================
-setInterval(() => {
-    loadData(currentRange);
-    updateStatus();
-}, 3000);
+// ================= UPDATE ALL =================
+async function updateAll() {
+    for (let dev of devices) {
+        updateDevice(dev);
+    }
+}
+
+// ================= AUTO REFRESH =================
+setInterval(updateAll, 5000);
 
 // INIT
 (async () => {
     await loadDevices();
-    loadData('hour');
-    updateStatus();
+    updateAll();
 })();
-
 </script>
 
 </body>

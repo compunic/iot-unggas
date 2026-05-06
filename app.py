@@ -1,4 +1,4 @@
-import sqlite3 
+import sqlite3
 import os
 from flask import Flask, request, jsonify, render_template
 
@@ -8,12 +8,23 @@ app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(BASE_DIR, "dhtmq.db")
 
+
+# =========================
+# DATABASE CONNECTION
+# =========================
+def get_db():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 # =========================
 # INIT DATABASE
 # =========================
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     c = conn.cursor()
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS sensor_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,6 +35,10 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # INDEX untuk performa multi device
+    c.execute("CREATE INDEX IF NOT EXISTS idx_nama_esp ON sensor_data(nama_esp)")
+
     conn.commit()
     conn.close()
 
@@ -32,12 +47,14 @@ def init_db():
 # INSERT DATA
 # =========================
 def insert_data(nama_esp, suhu, kelembaban, amonia):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     c = conn.cursor()
+
     c.execute(
         "INSERT INTO sensor_data (nama_esp, suhu, kelembaban, amonia) VALUES (?, ?, ?, ?)",
         (nama_esp, suhu, kelembaban, amonia)
     )
+
     conn.commit()
     conn.close()
 
@@ -60,7 +77,10 @@ def receive_data():
     kelembaban = content.get("kelembaban")
     amonia = content.get("amonia")
 
-    if nama_esp is None or suhu is None or kelembaban is None:
+    if not nama_esp:
+        return jsonify({"status": "error", "message": "nama_esp wajib"}), 400
+
+    if suhu is None or kelembaban is None:
         return jsonify({"status": "error", "message": "Incomplete data"}), 400
 
     try:
@@ -73,68 +93,97 @@ def receive_data():
 
 
 # =========================
-# GET LATEST DATA
+# GET DEVICES (LIST KANDANG)
+# =========================
+@app.route('/devices', methods=['GET'])
+def devices():
+    conn = get_db()
+    c = conn.cursor()
+
+    c.execute("SELECT DISTINCT nama_esp FROM sensor_data")
+    rows = c.fetchall()
+
+    conn.close()
+
+    return jsonify([row["nama_esp"] for row in rows])
+
+
+# =========================
+# GET LATEST DATA (PER DEVICE)
 # =========================
 @app.route('/latest', methods=['GET'])
 def latest_data():
-    conn = sqlite3.connect(DB_NAME)
+    nama_esp = request.args.get("nama_esp")
+
+    conn = get_db()
     c = conn.cursor()
-    c.execute("""
-        SELECT id, nama_esp, suhu, kelembaban, amonia, timestamp
-        FROM sensor_data ORDER BY id DESC LIMIT 1
-    """)
+
+    if nama_esp:
+        c.execute("""
+            SELECT * FROM sensor_data
+            WHERE nama_esp = ?
+            ORDER BY id DESC LIMIT 1
+        """, (nama_esp,))
+    else:
+        c.execute("""
+            SELECT * FROM sensor_data
+            ORDER BY id DESC LIMIT 1
+        """)
+
     row = c.fetchone()
     conn.close()
 
-    if row:
-        return jsonify({
-            "id": row[0],
-            "nama_esp": row[1],
-            "suhu": row[2],
-            "kelembaban": row[3],
-            "amonia": row[4],
-            "timestamp": row[5]
-        })
-    return jsonify({"status": "no data"}), 404
+    if not row:
+        return jsonify({"status": "no data"}), 404
+
+    return jsonify(dict(row))
 
 
 # =========================
-# CHART DATA (MULTI RANGE)
+# CHART DATA
 # =========================
 @app.route('/chart-data', methods=['GET'])
 def chart_data():
     range_type = request.args.get('range', 'hour')
+    nama_esp = request.args.get('nama_esp')
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     c = conn.cursor()
 
-    if range_type == 'minute':
-        filter_time = "-60 minutes"
-    elif range_type == 'hour':
-        filter_time = "-24 hours"
-    elif range_type == 'weekly':
-        filter_time = "-7 days"
-    elif range_type == 'monthly':
-        filter_time = "-30 days"
+    # FILTER WAKTU
+    range_map = {
+        "minute": "-60 minutes",
+        "hour": "-24 hours",
+        "weekly": "-7 days",
+        "monthly": "-30 days"
+    }
+
+    filter_time = range_map.get(range_type, "-1 day")
+
+    if nama_esp:
+        c.execute(f"""
+            SELECT suhu, kelembaban, amonia, timestamp
+            FROM sensor_data
+            WHERE nama_esp = ?
+            AND timestamp >= datetime('now', '{filter_time}')
+            ORDER BY id ASC
+        """, (nama_esp,))
     else:
-        filter_time = "-1 day"
+        c.execute(f"""
+            SELECT suhu, kelembaban, amonia, timestamp
+            FROM sensor_data
+            WHERE timestamp >= datetime('now', '{filter_time}')
+            ORDER BY id ASC
+        """)
 
-    query = f"""
-        SELECT suhu, kelembaban, amonia, timestamp
-        FROM sensor_data
-        WHERE timestamp >= datetime('now', '{filter_time}')
-        ORDER BY id ASC
-    """
-
-    c.execute(query)
     rows = c.fetchall()
     conn.close()
 
     return jsonify({
-        "suhu": [r[0] for r in rows],
-        "kelembaban": [r[1] for r in rows],
-        "amonia": [r[2] for r in rows],
-        "waktu": [r[3][11:16] for r in rows]
+        "suhu": [r["suhu"] for r in rows],
+        "kelembaban": [r["kelembaban"] for r in rows],
+        "amonia": [r["amonia"] for r in rows],
+        "waktu": [r["timestamp"][11:16] for r in rows]
     })
 
 
@@ -143,29 +192,43 @@ def chart_data():
 # =========================
 @app.route('/analysis', methods=['GET'])
 def analysis():
-    conn = sqlite3.connect(DB_NAME)
+    nama_esp = request.args.get("nama_esp")
+
+    conn = get_db()
     c = conn.cursor()
 
-    c.execute("""
-        SELECT suhu, kelembaban, amonia
-        FROM sensor_data
-        ORDER BY id DESC LIMIT 1
-    """)
+    if nama_esp:
+        c.execute("""
+            SELECT suhu, kelembaban, amonia
+            FROM sensor_data
+            WHERE nama_esp = ?
+            ORDER BY id DESC LIMIT 1
+        """, (nama_esp,))
+    else:
+        c.execute("""
+            SELECT suhu, kelembaban, amonia
+            FROM sensor_data
+            ORDER BY id DESC LIMIT 1
+        """)
+
     row = c.fetchone()
     conn.close()
 
     if not row:
         return jsonify({"status": "no data"}), 404
 
-    suhu, hum, amonia = row
+    suhu = row["suhu"]
+    hum = row["kelembaban"]
+    amonia = row["amonia"]
 
-    # ===== SUHU =====
+    kondisi = "AMAN"
+
+    # SUHU
     if suhu >= 32:
         status_suhu = "🔥 Terlalu Panas"
         kondisi = "BAHAYA"
     elif suhu >= 30:
         status_suhu = "👍 Ideal DOC"
-        kondisi = "AMAN"
     elif suhu >= 28:
         status_suhu = "⚠️ Mulai Dingin"
         kondisi = "WARNING"
@@ -173,7 +236,7 @@ def analysis():
         status_suhu = "❄️ Dingin"
         kondisi = "BAHAYA"
 
-    # ===== KELEMBABAN =====
+    # KELEMBABAN
     if 50 <= hum <= 70:
         status_hum = "👍 Normal"
     elif hum < 50:
@@ -181,7 +244,7 @@ def analysis():
     else:
         status_hum = "⚠️ Lembab"
 
-    # ===== AMONIA =====
+    # AMONIA
     if amonia is None:
         status_amonia = "Tidak terbaca"
     elif amonia < 20:
@@ -194,6 +257,7 @@ def analysis():
         kondisi = "BAHAYA"
 
     return jsonify({
+        "nama_esp": nama_esp,
         "suhu": suhu,
         "kelembaban": hum,
         "amonia": amonia,
@@ -209,26 +273,35 @@ def analysis():
 # =========================
 @app.route('/status', methods=['GET'])
 def status():
-    conn = sqlite3.connect(DB_NAME)
+    nama_esp = request.args.get("nama_esp")
+
+    conn = get_db()
     c = conn.cursor()
 
-    c.execute("""
-        SELECT suhu, kelembaban, amonia
-        FROM sensor_data
-        ORDER BY id DESC LIMIT 1
-    """)
+    if nama_esp:
+        c.execute("""
+            SELECT suhu, kelembaban, amonia
+            FROM sensor_data
+            WHERE nama_esp = ?
+            ORDER BY id DESC LIMIT 1
+        """, (nama_esp,))
+    else:
+        c.execute("""
+            SELECT suhu, kelembaban, amonia
+            FROM sensor_data
+            ORDER BY id DESC LIMIT 1
+        """)
+
     row = c.fetchone()
     conn.close()
 
     if not row:
         return jsonify({"status": "no data"}), 404
 
-    suhu, hum, amonia = row
-
     return jsonify({
-        "suhu": suhu,
-        "kelembaban": hum,
-        "amonia": amonia
+        "suhu": row["suhu"],
+        "kelembaban": row["kelembaban"],
+        "amonia": row["amonia"]
     })
 
 
@@ -242,9 +315,11 @@ def delete_all():
     if not content or content.get("password") != SECRET_PASSWORD:
         return jsonify({"status": "error"}), 403
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     c = conn.cursor()
+
     c.execute("DELETE FROM sensor_data")
+
     conn.commit()
     conn.close()
 
@@ -261,9 +336,11 @@ def reset_db():
     if not content or content.get("password") != SECRET_PASSWORD:
         return jsonify({"status": "error"}), 403
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     c = conn.cursor()
+
     c.execute("DROP TABLE IF EXISTS sensor_data")
+
     conn.commit()
     conn.close()
 
@@ -282,15 +359,14 @@ def dashboard():
 
 @app.route('/')
 def home():
-    return "IoT Server Running"
+    return "IoT Multi Sensor Server Running 🚀"
 
 
 # =========================
 # MAIN
 # =========================
-
 init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
